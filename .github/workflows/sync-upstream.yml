@@ -1,0 +1,21 @@
+name: 每日同步上游
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 同步上游默认分支
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          branch="$(gh api "repos/$REPO" --jq .default_branch)"
+          gh api --method POST "repos/$REPO/merge-upstream" -f "branch=$branch"
