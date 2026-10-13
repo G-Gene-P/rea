@@ -276,6 +276,15 @@ sharding. Static checks, documentation, build, package verification, and
 real-system lanes remain separate jobs so one kind of evidence cannot stand in
 for another. Workflow syntax and expression validation runs inside the required
 static-check job when workflow changes select it, avoiding a separate runner.
+Native, provider, fixture, SQLite compatibility, and website lanes wait for
+static checks to succeed before allocating their runners. This avoids spending
+those runner slots on revisions that already fail static validation. Portable
+test shards and documentation checks remain independent of static results, so
+they can still provide diagnostic feedback. The required gate rejects skipped
+selected lanes when static checks fail; passing revisions retain all selected
+coverage. This ordering reduces peak demand on invalid revisions but can add
+static-check waiting to otherwise passing runs; it is not a measured reduction
+in end-to-end latency.
 
 The separate `CI timings` workflow batches recent completed CI and Release runs
 hourly or on manual dispatch. It uploads `ci-job-timings-batch` with raw API pages and
@@ -721,6 +730,44 @@ specifications, independent mappings, unchanged bytes, and decompilation of a
 known return value. AArch64 remains covered by deterministic tests rather than
 this real-provider lane. See [raw binary analysis](raw-binary.md).
 
+`npm run verify:ghidra:address-context` runs on Linux with a caller-installed
+Ghidra, full JDK, and an x86-64 ELF GCC toolchain (`CC` selects another compatible
+compiler). It builds
+`tests/conformance/c/pie-address-context.c` as a PIE ELF without executing it.
+The compiled CLI and real stdio MCP workflow must expose the measured image
+base, retain segment address spaces, agree on the overview, resolve explicit and
+numeric file offsets, and reject unmapped analysis addresses with actionable
+guidance. It checks the reverse `address-to-file-offset` mapping, file-coordinate
+Evidence locations, and the suggested CLI search and load-image commands.
+The verifier compares mapped bytes with the source file and checks source
+identity, session preservation after failed lookup, owned runtime cleanup, and
+verified empty process lineage. This lane does not establish Windows or macOS
+real-provider coverage.
+
+For source-identity boundaries that a normal single-file import cannot create,
+`tests/conformance/ghidra/ReaFileOffsetSourceProbe.java` exercises the production
+bridge against real Ghidra `FileBytes`. It rejects auxiliary and partial sources,
+checks the original target's round trip, and retains ambiguity when duplicate
+target bytes have distinct loaded mappings. Injected decompiler failures and
+cancellation verify that completed source/function resolution facts and backend
+failure codes survive; these injections do not establish natural engine failures.
+On Windows, after creating the
+source-owned PE fixture, run from the repository root:
+
+```powershell
+node scripts/create-ghidra-windows-fixture.mjs
+$proofRoot = Join-Path $env:TEMP 'rea-file-offset-source-proof'
+New-Item -ItemType Directory -Path $proofRoot -Force | Out-Null
+Copy-Item bridge/ghidra/ReaGhidraBridge.java, bridge/ghidra/ReaGhidraExtensions.java, tests/conformance/ghidra/ReaFileOffsetSourceProbe.java -Destination $proofRoot
+& "$env:GHIDRA_INSTALL_DIR/support/analyzeHeadless.bat" $proofRoot source-proof -import "$PWD/build/fixtures/rea-ghidra-windows.exe" -scriptPath $proofRoot -postScript ReaFileOffsetSourceProbe.java -deleteProject
+```
+
+Require the `REA_FILE_OFFSET_SOURCE_OK` marker and no script errors; Ghidra may
+exit successfully even when a post-script fails. The probe edits only its
+temporary analysis database and does not execute the fixture. This producer
+regression supplements public CLI/MCP coverage and does not establish Linux
+host behavior or native process-supervision controls.
+
 ## Apple Interface Builder archives
 
 `npm run verify:interface-builder` compiles the source-owned AppKit XIB into a
@@ -803,9 +850,12 @@ observation. Manual dispatch, `ci:full`, and exact release qualification always
 run full validation.
 
 Full qualification includes aggregate coverage,
-every portable provider lane, and all native hosts below. A `ci:full` PR label
-selects full qualification on the next PR run; manual dispatch can request it
-immediately. Fast-tier broad fallbacks retain all owner lanes and the three-host
+every portable provider lane, and all native hosts below. Adding `ci:full`
+immediately starts the separate `Full PR qualification` workflow against the
+label event's merge revision; subsequent PR revisions also select the full tier
+in normal CI while that label remains. Unrelated labels do not start validation
+jobs or replace the main CI checks. Manual dispatch also requests full validation.
+Fast-tier broad fallbacks retain all owner lanes and the three-host
 package matrix; Intel macOS and coverage remain full-tier obligations. Each
 classification job records its selection and broad-fallback reasons in the run
 summary. Representative Git-diff cases live in
@@ -813,7 +863,12 @@ summary. Representative Git-diff cases live in
 
 `CI required` always runs and checks classification and every selected lane,
 rejecting failed, cancelled, or unexpectedly skipped work. Branch protection
-should require this aggregate, `Static checks`, and `Portable tests`. Fast runs
+should require this aggregate, `Static checks`, `Portable tests`, and
+`Conventional PR title`. Title validation runs separately on PR opening,
+reopening, commits, and edits; correcting a title refreshes only this lightweight
+check. It reads title text through an environment variable, executes no PR code,
+and has no token permissions. Its separate concurrency group cannot cancel
+test runs. Fast runs
 cancel superseded feedback for the same PR or main branch. Scheduled/manual
 qualification has a separate concurrency group: active work finishes and only
 the latest pending run is retained. Release qualification is grouped by its
